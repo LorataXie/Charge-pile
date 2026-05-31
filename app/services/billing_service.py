@@ -19,13 +19,19 @@ def _get_period(hour: int) -> str:
 
 
 def _get_period_end(current_time: datetime) -> datetime:
+    """返回 current_time 所在计费时段的下一个边界时刻。
+    23:00 之后的下一个是次日 0:00（谷时从 23 到次日 7），
+    因此不能 replace(hour=24)（Python 不支持），改用 timedelta。
+    """
     h = current_time.hour
     boundaries = [7, 10, 15, 18, 21, 23]
     for b in boundaries:
         period_start = current_time.replace(hour=b, minute=0, second=0, microsecond=0)
         if period_start > current_time:
             return period_start
-    return current_time.replace(hour=24, minute=0, second=0, microsecond=0)
+    # 超过 23:00 → 次日 0:00
+    from datetime import timedelta
+    return (current_time + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 class BillingService:

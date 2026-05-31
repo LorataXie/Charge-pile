@@ -67,6 +67,10 @@ const API = {
     listReports: () => api('/reports'),
     getReport: (reportId) => api(`/reports/${reportId}`),
 
+    // Vehicles
+    listMyVehicles: () => api('/vehicles'),
+    createVehicle: (license_plate, battery_capacity) => api('/vehicles', { method: 'POST', body: JSON.stringify({ license_plate, battery_capacity }) }),
+
     // Billing
     getRules: () => api('/billing/rules'),
 

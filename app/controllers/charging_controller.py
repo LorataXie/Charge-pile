@@ -7,9 +7,32 @@ from app.schemas import (
 from app.services.scheduling_service import SchedulingService
 from app.services.billing_service import BillingService
 from app.dao.order_dao import OrderDAO
+from app.dao.vehicle_dao import VehicleDAO
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/api/v1/orders", tags=["充电请求"])
+
+
+async def _own_order(order_id: int, user_id: int, db: AsyncSession):
+    """校验订单归属，不通过则 403。"""
+    dao = OrderDAO(db)
+    order = await dao.get_by_id(order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="订单不存在")
+    if order.user_id != user_id:
+        raise HTTPException(status_code=403, detail="无权操作此订单")
+    return order
+
+
+async def _own_vehicle(vehicle_id: int, user_id: int, db: AsyncSession):
+    """校验车辆归属，不通过则 403。"""
+    dao = VehicleDAO(db)
+    v = await dao.get_by_id(vehicle_id)
+    if not v:
+        raise HTTPException(status_code=404, detail="车辆不存在")
+    if v.user_id != user_id:
+        raise HTTPException(status_code=403, detail="无权使用此车辆")
+    return v
 
 
 @router.get("", response_model=list[ChargeOrderResponse])
@@ -28,11 +51,7 @@ async def get_order(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    dao = OrderDAO(db)
-    order = await dao.get_by_id(order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="订单不存在")
-    return order
+    return await _own_order(order_id, int(current_user["sub"]), db)
 
 
 @router.post("", response_model=ChargeOrderResponse)
@@ -40,15 +59,12 @@ async def submit_order(
     req: ChargeRequest,
     current_user: dict = Depends(get_current_user),
     svc: SchedulingService = Depends(get_scheduling_service),
+    db: AsyncSession = Depends(get_db),
 ):
+    uid = int(current_user["sub"])
+    await _own_vehicle(req.vehicle_id, uid, db)
     try:
-        order = await svc.submit_request(
-            user_id=int(current_user["sub"]),
-            vehicle_id=req.vehicle_id,
-            mode=req.mode,
-            requested_kwh=req.requested_kwh,
-        )
-        return order
+        return await svc.submit_request(uid, req.vehicle_id, req.mode, req.requested_kwh)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -59,14 +75,11 @@ async def modify_order(
     req: ModifyChargeRequest,
     current_user: dict = Depends(get_current_user),
     svc: SchedulingService = Depends(get_scheduling_service),
+    db: AsyncSession = Depends(get_db),
 ):
+    await _own_order(order_id, int(current_user["sub"]), db)
     try:
-        order = await svc.modify_request(
-            order_id=order_id,
-            new_mode=req.new_mode,
-            new_kwh=req.new_kwh,
-        )
-        return order
+        return await svc.modify_request(order_id, req.new_mode, req.new_kwh)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -76,10 +89,11 @@ async def cancel_order(
     order_id: int,
     current_user: dict = Depends(get_current_user),
     svc: SchedulingService = Depends(get_scheduling_service),
+    db: AsyncSession = Depends(get_db),
 ):
+    await _own_order(order_id, int(current_user["sub"]), db)
     try:
-        order = await svc.cancel_request(order_id)
-        return order
+        return await svc.cancel_request(order_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -89,10 +103,11 @@ async def end_charging(
     order_id: int,
     current_user: dict = Depends(get_current_user),
     svc: SchedulingService = Depends(get_scheduling_service),
+    db: AsyncSession = Depends(get_db),
 ):
+    await _own_order(order_id, int(current_user["sub"]), db)
     try:
-        order = await svc.end_charging(order_id)
-        return order
+        return await svc.end_charging(order_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -102,7 +117,10 @@ async def get_detail(
     order_id: int,
     current_user: dict = Depends(get_current_user),
     billing_svc: BillingService = Depends(get_billing_service),
+    db: AsyncSession = Depends(get_db),
 ):
+    # 详单必须本人才能看
+    await _own_order(order_id, int(current_user["sub"]), db)
     detail = await billing_svc.get_detail(order_id)
     if not detail:
         raise HTTPException(status_code=404, detail="详单不存在")
