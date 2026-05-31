@@ -433,16 +433,13 @@ class SchedulingService:
 
     async def dispatch_from_waiting_area(self) -> int:
         """仿真引擎调用的公共入口。"""
-        before = sum(
-            len(await self.queue_dao.get_waiting_by_mode(m))
-            for m in ('F', 'T')
-        )
+        before_f = len(await self.queue_dao.get_waiting_by_mode('F'))
+        before_t = len(await self.queue_dao.get_waiting_by_mode('T'))
+        before = before_f + before_t
         await self._strategy_dispatch()
-        after = sum(
-            len(await self.queue_dao.get_waiting_by_mode(m))
-            for m in ('F', 'T')
-        )
-        return before - after
+        after_f = len(await self.queue_dao.get_waiting_by_mode('F'))
+        after_t = len(await self.queue_dao.get_waiting_by_mode('T'))
+        return before - (after_f + after_t)
 
     async def get_queue_status(self, order_id: int) -> dict:
         order = await self.order_dao.get_by_id(order_id)
