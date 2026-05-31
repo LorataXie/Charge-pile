@@ -84,66 +84,111 @@ async def seed():
                 vehicles[i] = existing[0].id
         await session.commit()
 
-    # ── 充电请求（按顺序提交，先到先得 → 溢出到等候区）──
-    # 每桩队列长度 M=3，3个快充桩 = 9 快充位，2个慢充桩 = 6 慢充位
-    # 提交 13 快充 + 8 慢充 → 快充多 4 个进等候区，慢充多 2 个进等候区
+    # ── 充电请求（极端不均衡负载，展现 MinTotalTime 策略）──
+    # 设计思路：
+    #   F3 全是轻量车(5~8度) → 0.6h 就能清空队列
+    #   F1 积压大电量(80~50度) → 6.3h 等待
+    #   T2 全是轻量车(5~10度) → 2.0h
+    #   T1 积压大电量(30~15度) → 6.5h
+    # 新车提交时，策略自动避开重载桩，优选轻载桩。
+    # Tick 推进后，轻载桩先空出位置，等候区车辆优先入轻载桩。
     async with async_session_factory() as session:
         ss = SchedulingService(session)
         clock.set(datetime(2026, 5, 31, 9, 0, 0))
 
-        fast_requests = [
-            (i, "F", 20.0 + (i % 5) * 5) for i in range(1, 14)  # user1~13, 20~40度
+        # 策略演示：每辆车都选"等待时间+自己充电时间"最短的桩
+        #
+        # 场景设计：
+        #   1. user1 200kWh 大电量 → F1 (所有桩空, 选第一个)   F1=6.67h
+        #   2. user2   5kWh 小电量 → F2 (F1=6.67h, F2/F3=0)  F2=0.17h
+        #   3. user3   5kWh 小电量 → F3 (F2已有车, F3空)     F3=0.17h
+        #   → 每辆车都在避开重载桩，选择最轻的！
+        #
+        # 之后逐渐填满所有桩，溢出进等候区
+        requests = [
+            # ── 快充演示组（极端对比）──
+            (1,  "F", 200, "F1:200kWh,重载!"),
+            (2,  "F",   5, "F2:避开重F1(6.7h),选空的F2"),
+            (3,  "F",   5, "F3:避开F1(6.7h)和F2(0.2h),选空的F3"),
+            # ── 填满快充桩 ──
+            (4,  "F",  20, ""),
+            (5,  "F",  15, ""),
+            (6,  "F",  10, ""),
+            (7,  "F",  25, ""),
+            (8,  "F",  30, ""),
+            (9,  "F",  35, ""),
+            # ── 快充溢出 → 等候区 ──
+            (10, "F",  20, "等候区(9个快充位已满)"),
+            (11, "F",  15, ""),
+            (12, "F",  25, ""),
+            (13, "F",  10, ""),
+            # ── 慢充演示组 ──
+            (14, "T",  60, "T1:60kWh,重载!"),
+            (15, "T",   5, "T2:避开重T1(6h),选空的T2"),
+            # ── 填满慢充桩 ──
+            (16, "T",  20, ""),
+            (17, "T",  10, ""),
+            (18, "T",  15, ""),
+            (19, "T",   8, ""),
+            # ── 慢充溢出 → 等候区 ──
+            (20, "T",  12, "等候区(6个慢充位已满)"),
+            (21, "T",   8, ""),
         ]
-        slow_requests = [
-            (i, "T", 8.0 + (i % 4) * 4) for i in range(14, 22)  # user14~21, 8~20度
-        ]
-        all_requests = fast_requests + slow_requests
+
+        print()
+        print("  调度决策过程（MinTotalTime = 等待时间 + 自己充电时间）:")
+        print("  ─────────────────────────────────────────────")
 
         stats = {"CHARGING": 0, "QUEUED": 0, "WAITING": 0}
-
-        for uid_idx, mode, kwh in all_requests:
+        for item in requests:
+            uid_idx, mode, kwh = item[0], item[1], item[2]
+            note = item[3] if len(item) > 3 else ""
             try:
                 order = await ss.submit_request(
-                    user_id=users[uid_idx],
-                    vehicle_id=vehicles[uid_idx],
-                    mode=mode,
-                    requested_kwh=kwh,
-                )
+                    user_id=users[uid_idx], vehicle_id=vehicles[uid_idx],
+                    mode=mode, requested_kwh=kwh)
                 st = order.status.value
                 stats[st] = stats.get(st, 0) + 1
+                pile_info = f"→桩{order.pile_id}" if order.pile_id else ""
+                status_info = f"[{st}]"
+                note_str = f"  ← {note}" if note else ""
+                print(f"  {order.queue_number}: user{uid_idx} {kwh}度 {status_info:12s} {pile_info:5s}{note_str}")
             except Exception as e:
                 print(f"  订单失败: user{uid_idx} {e}")
-
+        print("  ─────────────────────────────────────────────")
         await session.commit()
 
+    # 打印各桩负载
+    async with async_session_factory() as session:
+        from app.dao.queue_dao import QueueDAO
+        from app.dao.pile_dao import PileDAO
+        from app.dao.order_dao import OrderDAO
+        qd, pd, od = QueueDAO(session), PileDAO(session), OrderDAO(session)
+
+        print()
+        print("  当前各桩队列:")
+        for code, pid in [("F1",1),("F2",2),("F3",3),("T1",4),("T2",5)]:
+            pile = await pd.get_by_id(pid)
+            entries = await qd.get_pile_queue_entries(pid)
+            total = 0; labels = []
+            for e in entries:
+                o = await od.get_by_id(e.order_id)
+                k = o.requested_kwh if o else 0
+                total += k; labels.append(f"{k:.0f}度")
+            wait_h = total / pile.power_rate
+            print(f"  {code} ({pile.power_rate:.0f}度/h): {'+'.join(labels)}={total:.0f}度 → 等待 {wait_h:.1f}h")
+
     print("=" * 55)
-    print("  智能充电站调度计费系统 - 种子数据初始化完成")
+    print("  种子数据初始化完成")
     print("=" * 55)
-    print(f"  充电中: {stats.get('CHARGING', 0)}  排队中: {stats.get('QUEUED', 0)}  等候区: {stats.get('WAITING', 0)}")
+    print(f"  充电中: {stats.get('CHARGING',0)} | 排队中: {stats.get('QUEUED',0)} | 等候区: {stats.get('WAITING',0)}")
     print()
-    print("  ┌──────────────┬──────────────────────────────────┐")
-    print("  │ 充电桩队列   │ F1/F2/F3 (各3位)  T1/T2 (各3位) │")
-    print("  │ 等候区       │ 容量 N = 10                      │")
-    print("  └──────────────┴──────────────────────────────────┘")
+    print("  账号汇总: admin(admin123) + user1~25(user123)")
     print()
-    print("  ┌──────────┬──────────┬──────────────────────────┐")
-    print("  │ 账号     │ 密码     │ 说明                     │")
-    print("  ├──────────┼──────────┼──────────────────────────┤")
-    print("  │ admin    │ admin123 │ 管理员 - 全部管理功能    │")
-    print("  │ user1    │ user123  │ 快充 - 充电桩队列中      │")
-    print("  │ user2    │ user123  │ 快充 - 充电桩队列中      │")
-    print("  │ ...      │ user123  │ user1~13 快充区         │")
-    print("  │ user14   │ user123  │ 慢充 - 充电桩队列中      │")
-    print("  │ ...      │ user123  │ user14~21 慢充区         │")
-    print("  │ user22~25│ user123  │ 闲置（可注册后提交请求）  │")
-    print("  └──────────┴──────────┴──────────────────────────┘")
-    print()
-    print("  演示流程:")
-    print("  1. admin 登录 → 仿真控制 → Tick 推进时间")
-    print("  2. user1 登录 → 我的订单 → 查看状态变化")
-    print("  3. admin → 等候区 Tab → 查看排队车辆")
-    print("  4. admin → 故障管理 → 上报桩故障看重调度")
-    print("  5. admin → 报表 → 生成日报")
+    print("  演示 MinTotalTime 策略:")
+    print("  1. admin -> 仿真控制 -> 推 Tick 让轻载桩先空出")
+    print("  2. 观察等候区车辆被调度到等待时间最短的桩")
+    print("  3. admin -> 故障管理 -> 上报故障看重调度")
 
 
 if __name__ == "__main__":
