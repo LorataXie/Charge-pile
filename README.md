@@ -38,7 +38,19 @@ cp .env.example .env
 
 默认使用 SQLite，无需安装数据库。如需 MySQL，修改 `.env` 中的 `DATABASE_URL`。
 
-### 3. 创建管理员账号
+### 3. 初始化测试数据（推荐）
+
+```bash
+python cli/seed.py
+```
+
+一键创建所有测试数据：
+- 管理员：admin / admin123
+- 5个客户：user1~user5 / user123
+- 5辆车（京A1001~京A1005，60~100度）
+- 5条充电请求（3快充 + 2慢充，已自动调度到充电桩）
+
+如果只需要管理员账号：
 
 ```bash
 python cli/main.py create-admin -u admin -p admin123
