@@ -294,44 +294,42 @@ class SchedulingService:
             pile.status = PileStatus.CHARGING
             await self.pile_dao.update(pile)
 
-    # ─── fault handling ───────────────────────────────────────
+    # ─── 7. 故障处理 ───────────────────────────────────────
 
     async def handle_fault(self, pile_id: int, strategy_type: str) -> dict:
+        """7a 优先级 / 7b 时间顺序 调度"""
         pile = await self.pile_dao.get_by_id(pile_id)
         if not pile:
             raise ValueError("充电桩不存在")
-
         mode = pile.mode
 
-        # 1. 处理正在充电的车 → 生成中断详单
+        # ── 7. 正在充电的车 → 停止计费，生成详单 ──
         charging_entry = await self.queue_dao.get_pile_charging_entry(pile_id)
         if charging_entry:
-            charge_order = await self.order_dao.get_by_id(charging_entry.order_id)
-            if charge_order and charge_order.status == OrderStatus.CHARGING:
-                charge_order.end_time = self._now()
-                charge_order.status = OrderStatus.FAULT_INTERRUPTED
+            co = await self.order_dao.get_by_id(charging_entry.order_id)
+            if co and co.status == OrderStatus.CHARGING:
+                co.end_time = self._now()
+                co.status = OrderStatus.FAULT_INTERRUPTED
                 detail = await self.billing_service.calculate_billing(
-                    charge_order, pile.power_rate, is_fault_interrupted=True)
+                    co, pile.power_rate, is_fault_interrupted=True)
                 await self.billing_service.save_detail(detail)
-                await self.order_dao.update(charge_order)
+                await self.order_dao.update(co)
 
-        # 2. 标记故障
         await self.pile_service.mark_broken(pile_id)
 
-        # 3. 收集故障桩队列中所有订单（含刚中断的），全部移出
+        # ── 收集故障桩队列所有订单（包括刚中断的），全部移出 ──
         all_entries = await self.queue_dao.get_pile_queue_entries(pile_id)
-        affected_orders = []
+        affected = []
         for e in all_entries:
             o = await self.order_dao.get_by_id(e.order_id)
             if o and o.status not in (OrderStatus.FAULT_INTERRUPTED, OrderStatus.COMPLETED):
-                affected_orders.append(o)
+                affected.append(o)
             await self.queue_dao.remove_from_pile_queue(e.order_id)
 
-        # 4. 暂停等候区叫号
+        # ── 暂停等候区叫号 ──
         await self.queue_dao.set_waiting_paused(True)
 
-        if not affected_orders:
-            # 故障队列已空 → 直接恢复叫号
+        if not affected:
             await self.queue_dao.set_waiting_paused(False)
             await self._strategy_dispatch()
             return {"affected_count": 0, "strategy": strategy_type}
@@ -342,58 +340,65 @@ class SchedulingService:
         ]
 
         if strategy_type == "TIME_ORDER":
-            # 时间顺序：合并故障桩受影响订单 + 其他同类桩未充电订单，按排队号排序
-            strategy = TimeOrderScheduleStrategy()
+            # 7b: 合并 "其他同类型桩尚未充电车辆 + 故障队列车辆"，按排队号排序
             for p in same_mode_piles:
                 entries = await self.queue_dao.get_pile_queue_entries(p.id)
                 for e in entries:
                     if not e.is_charging:
                         o = await self.order_dao.get_by_id(e.order_id)
-                        if o and o not in affected_orders:
-                            affected_orders.append(o)
+                        if o and o not in affected:
+                            affected.append(o)
                         await self.queue_dao.remove_from_pile_queue(e.order_id)
-            affected_orders.sort(key=lambda o: _extract_queue_num(o.queue_number or ""))
-        else:
-            # 优先级：仅处理故障桩的受影响订单
-            strategy = PriorityScheduleStrategy()
+            affected.sort(key=lambda o: _extract_queue_num(o.queue_number or ""))
 
-        # 构建上下文
-        pile_queues = {}
-        for p in same_mode_piles:
-            entries = await self.queue_dao.get_pile_queue_entries(p.id)
-            pile_queues[p.id] = [
-                {"requested_kwh": (await self.order_dao.get_by_id(e.order_id)).requested_kwh}
-                for e in entries if e.is_charging
-            ]
+        # ── 分配到有空位的同类型桩 ──
+        unassigned = []
+        for o in affected:
+            best_pile = None
+            best_time = float('inf')
+            for p in same_mode_piles:
+                q_size = await self.queue_dao.get_pile_queue_size(p.id)
+                if q_size < settings.PILE_QUEUE_LENGTH:
+                    kwh_list = await self._get_pile_queue_kwh_list(p.id)
+                    t = _calc_total_time(p, o, kwh_list)
+                    if t < best_time:
+                        best_time = t
+                        best_pile = p
+            if best_pile:
+                await self._dispatch_to_pile(o.id, best_pile.id)
+            else:
+                unassigned.append(o)
 
-        context = {"pile_queues": pile_queues, "queue_len": settings.PILE_QUEUE_LENGTH}
-        assignments = await strategy.dispatch(affected_orders, same_mode_piles, context)
+        # ── 未分配的车插入等候区前列（优先于普通等候车）──
+        if unassigned:
+            existing = await self.queue_dao.get_waiting_by_mode(mode)
+            shift = len(unassigned)
+            # 现有等候车后移
+            for w in reversed(existing):
+                w.position += shift
+            await self.session.flush()
+            for idx, o in enumerate(unassigned, start=1):
+                wq = WaitingQueue(order_id=o.id, queue_number=o.queue_number or "",
+                                  mode=o.mode, position=idx, entered_at=self._now())
+                await self.queue_dao.add_to_waiting(wq)
 
-        for o in affected_orders:
-            pid = assignments.get(o.id)
-            if pid:
-                await self._dispatch_to_pile(o.id, pid)
-
-        # 5. 恢复等候区叫号
+        # ── 恢复等候区叫号 ──
         await self.queue_dao.set_waiting_paused(False)
         await self._strategy_dispatch()
-        return {"affected_count": len(affected_orders), "strategy": strategy_type}
+        return {"affected_count": len(affected), "strategy": strategy_type,
+                "unassigned": len(unassigned)}
 
     async def handle_fault_recovery(self, pile_id: int) -> dict:
+        """7c 故障恢复：同类型桩有排队车时才重分配"""
         pile = await self.pile_dao.get_by_id(pile_id)
         if not pile:
             raise ValueError("充电桩不存在")
-
         mode = pile.mode
         await self.pile_service.mark_idle(pile_id)
 
         same_mode_piles = await self.pile_dao.get_available_by_mode(mode)
-        strategy = FaultRecoveryStrategy()
 
-        # 暂停叫号
-        await self.queue_dao.set_waiting_paused(True)
-
-        # 收集所有同类桩未充电订单
+        # ── 检查是否有排队车辆需要重分配 ──
         all_unstarted = []
         for p in same_mode_piles:
             entries = await self.queue_dao.get_pile_queue_entries(p.id)
@@ -402,31 +407,37 @@ class SchedulingService:
                     o = await self.order_dao.get_by_id(e.order_id)
                     if o:
                         all_unstarted.append(o)
+
+        if not all_unstarted:
+            # 没有排队车 → 直接恢复，无需重分配
+            await self._strategy_dispatch()
+            return {"redistributed": 0}
+
+        # ── 暂停叫号，合并所有未充电车按排队号重分 ──
+        await self.queue_dao.set_waiting_paused(True)
+
+        for p in same_mode_piles:
+            entries = await self.queue_dao.get_pile_queue_entries(p.id)
+            for e in entries:
+                if not e.is_charging:
                     await self.queue_dao.remove_from_pile_queue(e.order_id)
 
-        if all_unstarted:
-            all_unstarted.sort(key=lambda o: _extract_queue_num(o.queue_number or ""))
+        all_unstarted.sort(key=lambda o: _extract_queue_num(o.queue_number or ""))
 
-            pile_queues = {}
+        for o in all_unstarted:
+            best_pile = None
+            best_time = float('inf')
             for p in same_mode_piles:
-                entries = [
-                    e for e in await self.queue_dao.get_pile_queue_entries(p.id)
-                    if e.is_charging
-                ]
-                pile_queues[p.id] = [
-                    {"requested_kwh": (await self.order_dao.get_by_id(e.order_id)).requested_kwh}
-                    for e in entries
-                ]
+                q_size = await self.queue_dao.get_pile_queue_size(p.id)
+                if q_size < settings.PILE_QUEUE_LENGTH:
+                    kwh_list = await self._get_pile_queue_kwh_list(p.id)
+                    t = _calc_total_time(p, o, kwh_list)
+                    if t < best_time:
+                        best_time = t
+                        best_pile = p
+            if best_pile:
+                await self._dispatch_to_pile(o.id, best_pile.id)
 
-            context = {"pile_queues": pile_queues, "queue_len": settings.PILE_QUEUE_LENGTH}
-            assignments = await strategy.dispatch(all_unstarted, same_mode_piles, context)
-
-            for o in all_unstarted:
-                pid = assignments.get(o.id)
-                if pid:
-                    await self._dispatch_to_pile(o.id, pid)
-
-        # 恢复叫号
         await self.queue_dao.set_waiting_paused(False)
         await self._strategy_dispatch()
         return {"redistributed": len(all_unstarted)}
