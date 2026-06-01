@@ -452,7 +452,7 @@ createApp({
             if (t !== 'detail') { detailData.value = null; detailOrderId.value = null; }
             if (t==='submit'||t==='vehicles') await loadMyVehicles();
             if (t==='orders') { await loadMyOrders(); autoRefreshTimer = setInterval(loadMyOrders, 5000); }
-            if (t==='piles'||t==='overview'||t==='manage') { await loadPiles(); autoRefreshTimer = setInterval(loadPiles, 8000); }
+            if (t==='piles'||t==='overview'||t==='manage') { await loadPiles(); autoRefreshTimer = setInterval(loadPiles, 5000); }
             if (t==='waiting') { await loadWaitingArea(); autoRefreshTimer = setInterval(loadWaitingArea, 5000); }
             if (t==='faults') await loadFaults();
             if (t==='reports') await loadReports();
