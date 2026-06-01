@@ -61,12 +61,15 @@
                     <h3>提交充电请求</h3>
                     <div class="form-row">
                         <div class="form-group"><label>选择车辆</label>
-                            <select v-model="submitForm.vehicle_id">
-                                <option :value="0" disabled>请先创建车辆</option>
+                            <select v-model="submitForm.vehicle_id" v-if="myVehicles.length">
+                                <option :value="0" disabled>选择车辆</option>
                                 <option v-for="v in myVehicles" :key="v.id" :value="v.id">
                                     {{ v.license_plate }} ({{ v.battery_capacity }}度)
                                 </option>
                             </select>
+                            <div v-else class="alert alert-info" style="margin:0">
+                                暂无车辆，请先到 <a href="javascript:void(0)" @click="switchTab('vehicles')" style="color:#1a73e8;font-weight:bold">「我的车辆」</a> 创建车辆后再提交请求。
+                            </div>
                         </div>
                         <div class="form-group"><label>充电模式</label>
                             <select v-model="submitForm.mode">
@@ -79,11 +82,27 @@
                         </div>
                     </div>
                     <button class="btn btn-primary" @click="doSubmitOrder" :disabled="loading||!submitForm.vehicle_id">提交请求</button>
+                    <!-- 计费时段说明 -->
+                    <details style="margin-top:16px;padding:12px;background:#fffbf0;border:1px solid #f9ab00;border-radius:8px">
+                        <summary style="cursor:pointer;font-weight:bold;color:#e37400">计费时段说明</summary>
+                        <table style="margin-top:8px;font-size:13px">
+                            <thead><tr><th>时段</th><th>时间</th><th>电价(元/度)</th><th>服务费(元/度)</th></tr></thead>
+                            <tbody>
+                                <tr style="color:#d93025"><td>峰时</td><td>10:00-15:00, 18:00-21:00</td><td>1.0</td><td>0.8</td></tr>
+                                <tr style="color:#e37400"><td>平时</td><td>7:00-10:00, 15:00-18:00, 21:00-23:00</td><td>0.7</td><td>0.8</td></tr>
+                                <tr style="color:#1e8e3e"><td>谷时</td><td>23:00-次日7:00</td><td>0.4</td><td>0.8</td></tr>
+                            </tbody>
+                        </table>
+                        <div style="margin-top:4px;font-size:12px;color:#80868b">总费用 = 充电费(各时段电量×时段电价) + 服务费(总电量×0.8)</div>
+                    </details>
                     <div v-if="submitResult" style="margin-top:12px;padding:16px;background:#e8f0fe;border-radius:8px">
                         <strong>提交成功!</strong><br>
                         排队号：<span style="font-size:22px;color:#1a73e8;font-weight:bold">{{ submitResult.queue_number }}</span><br>
                         订单ID：{{ submitResult.id }} | 状态：{{ statusMap[submitResult.status] }}
                         <span v-if="submitResult.pile_id"> | 分配至充电桩: {{ pileCode(submitResult.pile_id) }}</span>
+                        <br><a href="javascript:void(0)" @click="switchTab('orders')" style="color:#1a73e8;text-decoration:underline">
+                          前往「我的订单」查看实时状态（每5秒自动刷新）
+                        </a>
                     </div>
                 </div>
 
@@ -97,7 +116,7 @@
                     <div v-else style="color:#80868b;margin-bottom:12px">暂无车辆，请创建</div>
                     <h4>创建车辆</h4>
                     <div class="form-row">
-                        <div class="form-group"><label>车牌号</label><input v-model="vehicleForm.license_plate" placeholder="京A12345"></div>
+                        <div class="form-group"><label>车牌号</label><input v-model="vehicleForm.license_plate" placeholder="京A BU556"></div>
                         <div class="form-group"><label>电池容量 (度)</label><input v-model.number="vehicleForm.battery_capacity" type="number" step="0.1" min="1" placeholder="60"></div>
                         <div class="form-group" style="display:flex;align-items:flex-end"><button class="btn btn-primary" @click="doCreateVehicle">创建车辆</button></div>
                     </div>
@@ -105,7 +124,8 @@
 
                 <!-- My Orders -->
                 <div v-if="tab==='orders'" class="card">
-                    <h3>我的订单 <button class="btn btn-sm btn-primary" @click="loadMyOrders" :disabled="loading" style="margin-left:12px">刷新</button></h3>
+                    <h3>我的订单 <button class="btn btn-sm btn-primary" @click="loadMyOrders" :disabled="loading" style="margin-left:12px">刷新</button> <small style="color:#80868b">(每5秒自动刷新)</small></h3>
+                    <div class="alert alert-info" style="font-size:13px">提示：订单状态随管理员仿真推进而变化。请联系管理员在「仿真控制」Tab 执行 Tick 推进充电进度。</div>
                     <table v-if="myOrders.length">
                         <thead><tr><th>ID</th><th>排队号</th><th>模式</th><th>请求量(度)</th><th>状态</th><th>充电桩</th><th>排队前车</th><th>操作</th></tr></thead>
                         <tbody>
@@ -159,7 +179,7 @@
                 </div>
 
                 <!-- View Detail -->
-                <div v-if="tab==='detail'||detailData" class="card">
+                <div v-if="tab==='detail'" class="card">
                     <h3>充电详单</h3>
                     <div class="form-row">
                         <div class="form-group"><label>订单ID</label><input v-model.number="detailOrderId"></div>
@@ -411,7 +431,8 @@ createApp({
                 loggedIn.value = true;
                 tab.value = user.value.role==='admin'?'overview':'submit';
                 await loadPiles();
-                if (user.value.role==='admin') { loadClock(); }
+                if (user.value.role === 'client') { await loadMyVehicles(); }
+                if (user.value.role === 'admin') { await loadClock(); }
             } catch(e) { loginMsg.value=e.message; loginMsgType.value='error'; }
         }
 
@@ -431,12 +452,16 @@ createApp({
             return pile ? pile.pile_code : `#${pileId}`;
         }
 
+        let autoRefreshTimer = null;
+
         async function switchTab(t) {
             tab.value = t;
+            if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+            if (t !== 'detail') { detailData.value = null; detailOrderId.value = null; }
             if (t==='submit'||t==='vehicles') await loadMyVehicles();
-            if (t==='orders') await loadMyOrders();
-            if (t==='piles'||t==='overview'||t==='manage') await loadPiles();
-            if (t==='waiting') await loadWaitingArea();
+            if (t==='orders') { await loadMyOrders(); autoRefreshTimer = setInterval(loadMyOrders, 5000); }
+            if (t==='piles'||t==='overview'||t==='manage') { await loadPiles(); autoRefreshTimer = setInterval(loadPiles, 8000); }
+            if (t==='waiting') { await loadWaitingArea(); autoRefreshTimer = setInterval(loadWaitingArea, 5000); }
             if (t==='faults') { await loadPiles(); await loadFaults(); }
             if (t==='reports') await loadReports();
             if (t==='sim') await loadClock();
