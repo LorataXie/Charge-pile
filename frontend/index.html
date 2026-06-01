@@ -166,7 +166,7 @@
                 </div>
 
                 <!-- View Detail -->
-                <div v-if="tab==='detail'||detailData" class="card">
+                <div v-if="tab==='detail'" class="card">
                     <h3>充电详单</h3>
                     <div class="form-row">
                         <div class="form-group"><label>订单ID</label><input v-model.number="detailOrderId"></div>
@@ -412,6 +412,7 @@ createApp({
         async function switchTab(t) {
             tab.value = t;
             if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+            if (t !== 'detail') { detailData.value = null; detailOrderId.value = null; }
             if (t==='submit'||t==='vehicles') await loadMyVehicles();
             if (t==='orders') { await loadMyOrders(); autoRefreshTimer = setInterval(loadMyOrders, 5000); }
             if (t==='piles'||t==='overview'||t==='manage') { await loadPiles(); autoRefreshTimer = setInterval(loadPiles, 8000); }
