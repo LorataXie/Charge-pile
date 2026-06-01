@@ -8,6 +8,7 @@ from app.services.scheduling_service import SchedulingService
 from app.dao.order_dao import OrderDAO
 from app.models.vehicle import Vehicle
 from app.simulation.clock import clock
+from app.models.user import User
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -47,9 +48,14 @@ async def get_pile(
             result = await db.execute(select(Vehicle).where(Vehicle.id == order.vehicle_id))
             vehicle = result.scalar_one_or_none()
 
+        # 查用户名
+        user_result = await db.execute(select(User).where(User.id == order.user_id))
+        user = user_result.scalar_one_or_none()
+
         vehicles.append({
             "order_id": e.order_id,
             "user_id": order.user_id,
+            "username": user.username if user else f"ID:{order.user_id}",
             "queue_number": order.queue_number or "",
             "requested_kwh": order.requested_kwh,
             "battery_capacity": vehicle.battery_capacity if vehicle else 0,

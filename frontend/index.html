@@ -238,9 +238,9 @@
                     <div v-if="pileDetail" style="margin-top:16px;padding:16px;background:#f8f9fa;border-radius:8px">
                         <h4>充电桩 {{ pileDetail.pile_code }} — 等候车辆</h4>
                         <table v-if="pileDetail.queue_vehicles.length">
-                            <thead><tr><th>用户ID</th><th>订单ID</th><th>排队号</th><th>电池容量(度)</th><th>请求量(度)</th><th>状态</th><th>位置</th><th>排队时长</th></tr></thead>
+                            <thead><tr><th>用户</th><th>订单ID</th><th>排队号</th><th>电池容量(度)</th><th>请求量(度)</th><th>状态</th><th>位置</th><th>排队时长</th></tr></thead>
                             <tbody><tr v-for="v in pileDetail.queue_vehicles" :key="v.order_id">
-                                <td>{{ v.user_id }}</td><td>{{ v.order_id }}</td><td><strong>{{ v.queue_number }}</strong></td>
+                                <td>{{ v.username || 'ID:'+v.user_id }}</td><td>{{ v.order_id }}</td><td><strong>{{ v.queue_number }}</strong></td>
                                 <td>{{ v.battery_capacity }}</td><td>{{ v.requested_kwh }}</td>
                                 <td>{{ v.is_charging?'充电中':'等待中' }}</td><td>#{{ v.position }}</td>
                                 <td><small>{{ (v.queue_duration_minutes || 0).toFixed(1) }} 分钟</small></td>
@@ -302,6 +302,18 @@
                                 <button class="btn btn-danger" @click="doReportFault">上报故障</button>
                                 <button class="btn btn-success" @click="doRecoverPile">故障恢复</button>
                             </div>
+                        </div>
+                        <!-- 调度去向详情 -->
+                        <div v-if="faultDispatchLog.length" style="margin-top:12px;padding:12px;background:#f8f9fa;border-radius:8px">
+                            <h4 style="margin:0 0 8px 0">调度去向</h4>
+                            <table style="font-size:13px">
+                                <thead><tr><th>排队号</th><th>操作</th><th>详情</th></tr></thead>
+                                <tbody><tr v-for="item in faultDispatchLog" :key="item.queue_number" :style="{background: item.action==='充电中断'?'#fce8e6':item.action.includes('等候区')?'#fff3cd':''}">
+                                    <td><strong>{{ item.queue_number }}</strong></td>
+                                    <td><span class="status-badge" :class="item.action==='充电中断'?'status-CANCELLED':item.action.includes('等候区')?'status-WAITING':'status-CHARGING'">{{ item.action }}</span></td>
+                                    <td>{{ item.detail }}</td>
+                                </tr></tbody>
+                            </table>
                         </div>
                     </div>
                     <div class="card">
@@ -414,6 +426,7 @@ createApp({
 
         async function doLogin() {
             loginMsg.value='';
+            resetAllState();
             try {
                 if (loginMode.value === 'register' && loginForm.role === 'admin') {
                     throw new Error('管理员账号不能在前端注册，请选择管理员客户端后使用已有管理员账号登录');
@@ -436,7 +449,25 @@ createApp({
             } catch(e) { loginMsg.value=e.message; loginMsgType.value='error'; }
         }
 
-        function logout() { clearToken(); loggedIn.value=false; user.value={}; }
+        function resetAllState() {
+            submitResult.value = null;
+            myOrders.value = [];
+            myVehicles.value = [];
+            detailData.value = null; detailOrderId.value = null;
+            modifyOrder.value = null;
+            pileDetail.value = null;
+            waitingList.value = [];
+            faults.value = [];
+            faultDispatchLog.value = [];
+            reports.value = [];
+            reportDetail.value = null;
+            simEvents.value = [];
+            piles.value = [];
+            globalMsg.value = '';
+            if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+        }
+
+        function logout() { clearToken(); resetAllState(); loggedIn.value=false; user.value={}; }
 
         // Shared state
         const tab = ref('submit');
@@ -598,12 +629,14 @@ createApp({
         // Admin: Faults
         const faultForm = reactive({pile_id:1, strategy:'PRIORITY'});
         const faults = ref([]);
+        const faultDispatchLog = ref([]);
 
         async function doReportFault() {
             try {
                 const r = await API.reportFault(faultForm.pile_id, faultForm.strategy);
+                faultDispatchLog.value = r.detail?.dispatch_log || [];
                 showMsg(r.message); await loadFaults(); await loadPiles();
-            } catch(e) { showMsg(e.message,'error'); }
+            } catch(e) { showMsg(e.message,'error'); faultDispatchLog.value = []; }
         }
 
         async function doRecoverPile() {
@@ -721,7 +754,7 @@ createApp({
             piles, loadPiles,
             pileDetail, loadPileDetail, doStartPile, doStopPile,
             waitingList, loadWaitingArea,
-            faultForm, faults, doReportFault, doRecoverPile, loadFaults,
+            faultForm, faults, faultDispatchLog, doReportFault, doRecoverPile, loadFaults,
             reportType, reports, reportDetail, doGenerateReport, loadReports, showReportDetail,
             simClock, simEvents, autoTickRunning, autoTickIntervalMs, loadClock, doTick, doTickN, startAutoTick, stopAutoTick,
         };
