@@ -65,11 +65,11 @@ async def seed():
         vdao = VehicleDAO(session)
         vehicles = {}
         plates = [
-            "京A0011","京A0022","京A0033","京A0044","京A0055",
-            "京A0066","京A0077","京A0088","京A0099","京A0100",
-            "京A0111","京A0122","京A0133","京A0144","京A0155",
-            "京A0166","京A0177","京A0188","京A0199","京A0200",
-            "京A0211","京A0222","京A0233","京A0244","京A0255",
+            "京A BU556","京B PT228","京C EM339","京D RA441","京E WS552",
+            "京F ND663","京G JK774","京H XF885","京J ZQ996","京K HY107",
+            "京L VC218","京M TQ329","京N PX430","京P LK541","京Q GT652",
+            "京R DY763","京S AB874","京T CD985","京U EF096","京V GH187",
+            "京W IJ278","京X KL369","京Y MN470","京Z OP581","京A QR692",
         ]
         for i in range(1, 26):
             existing = await vdao.get_by_user_id(users[i])

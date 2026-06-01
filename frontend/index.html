@@ -109,7 +109,7 @@
                     <div v-else style="color:#80868b;margin-bottom:12px">暂无车辆，请创建</div>
                     <h4>创建车辆</h4>
                     <div class="form-row">
-                        <div class="form-group"><label>车牌号</label><input v-model="vehicleForm.license_plate" placeholder="京A12345"></div>
+                        <div class="form-group"><label>车牌号</label><input v-model="vehicleForm.license_plate" placeholder="京A BU556"></div>
                         <div class="form-group"><label>电池容量 (度)</label><input v-model.number="vehicleForm.battery_capacity" type="number" step="0.1" min="1" placeholder="60"></div>
                         <div class="form-group" style="display:flex;align-items:flex-end"><button class="btn btn-primary" @click="doCreateVehicle">创建车辆</button></div>
                     </div>
