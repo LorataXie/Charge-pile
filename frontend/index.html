@@ -272,11 +272,10 @@
                 <div v-if="tab==='waiting'" class="card">
                     <h3>等候区车辆 <button class="btn btn-sm btn-primary" @click="loadWaitingArea" style="margin-left:12px">刷新</button></h3>
                     <table v-if="waitingList.length">
-                        <thead><tr><th>订单ID</th><th>排队号</th><th>模式</th><th>位置</th><th>暂停</th><th>排队时长</th></tr></thead>
+                        <thead><tr><th>用户</th><th>订单ID</th><th>排队号</th><th>模式</th><th>电量(度)</th><th>位置</th><th>排队时长</th></tr></thead>
                         <tbody><tr v-for="w in waitingList" :key="w.order_id">
-                            <td>{{ w.order_id }}</td><td><strong>{{ w.queue_number }}</strong></td>
-                            <td>{{ w.mode==='F'?'快充':'慢充' }}</td><td>#{{ w.position }}</td>
-                            <td>{{ w.is_paused?'是':'否' }}</td><td>{{ (w.queue_duration_minutes || 0).toFixed(1) }} 分钟</td>
+                            <td>{{ w.username || 'ID:'+w.user_id }}</td><td>{{ w.order_id }}</td><td><strong>{{ w.queue_number }}</strong></td>
+                            <td>{{ w.mode==='F'?'快充':'慢充' }}</td><td>{{ w.requested_kwh }}</td><td>#{{ w.position }}</td><td>{{ (w.queue_duration_minutes || 0).toFixed(1) }} 分钟</td>
                         </tr></tbody>
                     </table>
                     <div v-else style="color:#80868b;padding:24px;text-align:center">等候区暂无车辆</div>
