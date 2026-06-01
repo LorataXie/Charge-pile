@@ -4,6 +4,7 @@ from app.dependencies import get_db, get_current_user, get_current_admin
 from app.models.vehicle import Vehicle
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 router = APIRouter(prefix="/api/v1/vehicles", tags=["车辆管理"])
 
@@ -28,14 +29,24 @@ async def create_vehicle(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    license_plate = req.license_plate.strip()
+    existing = await db.execute(
+        select(Vehicle).where(Vehicle.license_plate == license_plate)
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="车牌号已存在，请换一个车牌")
+
     v = Vehicle(
         user_id=int(current_user["sub"]),
-        license_plate=req.license_plate,
+        license_plate=license_plate,
         battery_capacity=req.battery_capacity,
     )
     db.add(v)
-    await db.flush()
-    await db.refresh(v)
+    try:
+        await db.flush()
+        await db.refresh(v)
+    except IntegrityError:
+        raise HTTPException(status_code=400, detail="车牌号已存在，请换一个车牌")
     return v
 
 

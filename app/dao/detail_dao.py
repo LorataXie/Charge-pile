@@ -23,8 +23,8 @@ class DetailDAO(BaseDAO[ChargingDetail]):
     ) -> list[ChargingDetail]:
         result = await self.session.execute(
             select(ChargingDetail).where(
-                ChargingDetail.created_at >= start,
-                ChargingDetail.created_at < end
+                ChargingDetail.end_time >= start,
+                ChargingDetail.end_time < end
             )
         )
         return list(result.scalars().all())
@@ -44,7 +44,7 @@ class DetailDAO(BaseDAO[ChargingDetail]):
                 func.sum(ChargingDetail.service_fee).label("total_service_fee"),
                 func.sum(ChargingDetail.total_fee).label("total_fee"),
             )
-            .where(ChargingDetail.created_at >= start, ChargingDetail.created_at < end)
+            .where(ChargingDetail.end_time >= start, ChargingDetail.end_time < end)
             .group_by(ChargingDetail.pile_id)
         )
         return [

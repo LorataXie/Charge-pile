@@ -53,7 +53,12 @@ class SchedulingService:
         kwh_list = []
         for e in entries:
             o = await self.order_dao.get_by_id(e.order_id)
-            kwh_list.append(o.requested_kwh if o else 0)
+            if not o:
+                kwh_list.append(0)
+            elif e.is_charging:
+                kwh_list.append(max(o.requested_kwh - (o.actual_kwh or 0), 0))
+            else:
+                kwh_list.append(o.requested_kwh)
         return kwh_list
 
     # ─── submit ───────────────────────────────────────────────
@@ -62,9 +67,10 @@ class SchedulingService:
                              mode: str, requested_kwh: float) -> ChargingOrder:
         if mode not in ('F', 'T'):
             raise ValueError("充电模式必须为 F(快充) 或 T(慢充)")
-        waiting_count = len(await self.queue_dao.get_waiting_by_mode(mode))
+        waiting_count = len(await self.queue_dao.get_all_waiting_entries())
         if waiting_count >= settings.WAITING_AREA_SIZE:
             raise ValueError("等候区已满")
+        mode_waiting_count = len(await self.queue_dao.get_waiting_by_mode(mode))
 
         max_num = await self.order_dao.get_max_queue_number_for_mode(mode)
         qn = f"{mode}{max_num + 1}"
@@ -75,7 +81,7 @@ class SchedulingService:
         order = await self.order_dao.create(order)
 
         wq = WaitingQueue(order_id=order.id, queue_number=qn, mode=mode,
-                          position=waiting_count + 1, entered_at=self._now())
+                          position=mode_waiting_count + 1, entered_at=self._now())
         await self.queue_dao.add_to_waiting(wq)
         await self._strategy_dispatch()
         return order
@@ -159,7 +165,7 @@ class SchedulingService:
 
     # ─── end charging ─────────────────────────────────────────
 
-    async def end_charging(self, order_id: int) -> ChargingOrder:
+    async def end_charging(self, order_id: int, end_time: datetime | None = None) -> ChargingOrder:
         order = await self.order_dao.get_by_id(order_id)
         if not order:
             raise ValueError("订单不存在")
@@ -171,7 +177,7 @@ class SchedulingService:
         if not pile:
             raise ValueError("充电桩不存在")
 
-        order.end_time = self._now()
+        order.end_time = end_time or self._now()
         order.status = OrderStatus.COMPLETED
 
         detail = await self.billing_service.calculate_billing(order, pile.power_rate)
@@ -191,6 +197,65 @@ class SchedulingService:
         return order
 
     # ─── internal helpers ─────────────────────────────────────
+
+    async def _defer_orders_to_waiting_front(self, orders: list[ChargingOrder]) -> None:
+        if not orders:
+            return
+
+        mode = orders[0].mode
+        existing = await self.queue_dao.get_waiting_by_mode(mode)
+        offset = len(orders)
+        for entry in existing:
+            entry.position += offset
+
+        now = self._now()
+        for idx, order in enumerate(orders, start=1):
+            order.status = OrderStatus.WAITING
+            order.pile_id = None
+            order.queue_position = None
+            await self.order_dao.update(order)
+            await self.queue_dao.add_to_waiting(WaitingQueue(
+                order_id=order.id,
+                queue_number=order.queue_number or "",
+                mode=order.mode,
+                position=idx,
+                entered_at=now,
+            ))
+        await self.session.flush()
+
+    async def _dispatch_or_defer_orders(
+        self,
+        orders: list[ChargingOrder],
+        piles: list[ChargingPile],
+    ) -> tuple[int, int]:
+        assigned = 0
+        deferred: list[ChargingOrder] = []
+
+        for order in orders:
+            candidates = []
+            for pile in piles:
+                if pile.mode != order.mode or pile.status not in (PileStatus.IDLE, PileStatus.CHARGING):
+                    continue
+                if await self.queue_dao.get_pile_queue_size(pile.id) < settings.PILE_QUEUE_LENGTH:
+                    candidates.append(pile)
+
+            best_pile = None
+            best_time = float("inf")
+            for pile in candidates:
+                kwh_list = await self._get_pile_queue_kwh_list(pile.id)
+                total_time = _calc_total_time(pile, order, kwh_list)
+                if total_time < best_time:
+                    best_time = total_time
+                    best_pile = pile
+
+            if best_pile:
+                await self._dispatch_to_pile(order.id, best_pile.id)
+                assigned += 1
+            else:
+                deferred.append(order)
+
+        await self._defer_orders_to_waiting_front(deferred)
+        return assigned, len(deferred)
 
     async def _promote_next_in_pile(self, pile_id: int) -> None:
         entries = await self.queue_dao.get_pile_queue_entries(pile_id)
@@ -301,12 +366,11 @@ class SchedulingService:
         pile = await self.pile_dao.get_by_id(pile_id)
         if not pile:
             raise ValueError("充电桩不存在")
-        mode = pile.mode
-        dispatch_log = []  # 记录每辆车的调度去向
 
-        # ── 7. 正在充电的车 → 停止计费，生成详单 ──
+        mode = pile.mode
+        dispatch_log = []
         interrupted_qn = None
-        interrupted_detail_id = None
+
         charging_entry = await self.queue_dao.get_pile_charging_entry(pile_id)
         if charging_entry:
             co = await self.order_dao.get_by_id(charging_entry.order_id)
@@ -316,6 +380,8 @@ class SchedulingService:
                 detail = await self.billing_service.calculate_billing(
                     co, pile.power_rate, is_fault_interrupted=True)
                 await self.billing_service.save_detail(detail)
+                await self.pile_service.increment_stats(
+                    pile.id, detail.charge_duration_hours, detail.total_kwh)
                 await self.order_dao.update(co)
                 interrupted_qn = co.queue_number
                 dispatch_log.append({
@@ -328,24 +394,29 @@ class SchedulingService:
 
         await self.pile_service.mark_broken(pile_id)
 
-        # ── 收集故障桩队列所有订单（包括刚中断的），全部移出 ──
         all_entries = await self.queue_dao.get_pile_queue_entries(pile_id)
         affected = []
         for e in all_entries:
             o = await self.order_dao.get_by_id(e.order_id)
-            if o and o.status not in (OrderStatus.FAULT_INTERRUPTED, OrderStatus.COMPLETED):
+            if o and not e.is_charging and o.status not in (
+                OrderStatus.FAULT_INTERRUPTED, OrderStatus.COMPLETED, OrderStatus.CANCELLED
+            ):
                 affected.append(o)
             await self.queue_dao.remove_from_pile_queue(e.order_id)
 
-        # ── 暂停等候区叫号 ──
         await self.queue_dao.set_waiting_paused(True)
 
         if not affected:
             await self.queue_dao.set_waiting_paused(False)
             await self._strategy_dispatch()
-            return {"affected_count": 0, "strategy": strategy_type,
-                    "interrupted_vehicle": interrupted_qn,
-                    "dispatch_log": dispatch_log}
+            return {
+                "affected_count": 0,
+                "strategy": strategy_type,
+                "unassigned": 0,
+                "interrupted_vehicle": interrupted_qn,
+                "merged_from_other_piles": [],
+                "dispatch_log": dispatch_log,
+            }
 
         same_mode_piles = [
             p for p in await self.pile_dao.get_available_by_mode(mode)
@@ -354,7 +425,6 @@ class SchedulingService:
 
         merged_from_other_piles = []
         if strategy_type == "TIME_ORDER":
-            # 7b: 合并 "其他同类型桩尚未充电车辆 + 故障队列车辆"，按排队号排序
             for p in same_mode_piles:
                 entries = await self.queue_dao.get_pile_queue_entries(p.id)
                 for e in entries:
@@ -364,21 +434,22 @@ class SchedulingService:
                             affected.append(o)
                             merged_from_other_piles.append(o.queue_number)
                         await self.queue_dao.remove_from_pile_queue(e.order_id)
-            affected.sort(key=lambda o: _extract_queue_num(o.queue_number or ""))
 
-        # ── 分配到有空位的同类型桩 ──
+        affected.sort(key=lambda o: _extract_queue_num(o.queue_number or ""))
+
         unassigned = []
         for o in affected:
             best_pile = None
-            best_time = float('inf')
+            best_time = float("inf")
             for p in same_mode_piles:
-                q_size = await self.queue_dao.get_pile_queue_size(p.id)
-                if q_size < settings.PILE_QUEUE_LENGTH:
-                    kwh_list = await self._get_pile_queue_kwh_list(p.id)
-                    t = _calc_total_time(p, o, kwh_list)
-                    if t < best_time:
-                        best_time = t
-                        best_pile = p
+                if await self.queue_dao.get_pile_queue_size(p.id) >= settings.PILE_QUEUE_LENGTH:
+                    continue
+                kwh_list = await self._get_pile_queue_kwh_list(p.id)
+                total_time = _calc_total_time(p, o, kwh_list)
+                if total_time < best_time:
+                    best_time = total_time
+                    best_pile = p
+
             if best_pile:
                 await self._dispatch_to_pile(o.id, best_pile.id)
                 dispatch_log.append({
@@ -391,17 +462,24 @@ class SchedulingService:
             else:
                 unassigned.append(o)
 
-        # ── 未分配的车插入等候区前列（优先于普通等候车）──
         if unassigned:
             existing = await self.queue_dao.get_waiting_by_mode(mode)
             shift = len(unassigned)
-            for w in reversed(existing):
+            for w in existing:
                 w.position += shift
             await self.session.flush()
             for idx, o in enumerate(unassigned, start=1):
-                wq = WaitingQueue(order_id=o.id, queue_number=o.queue_number or "",
-                                  mode=o.mode, position=idx, entered_at=self._now())
-                await self.queue_dao.add_to_waiting(wq)
+                o.status = OrderStatus.WAITING
+                o.pile_id = None
+                o.queue_position = None
+                await self.order_dao.update(o)
+                await self.queue_dao.add_to_waiting(WaitingQueue(
+                    order_id=o.id,
+                    queue_number=o.queue_number or "",
+                    mode=o.mode,
+                    position=idx,
+                    entered_at=self._now(),
+                ))
                 dispatch_log.append({
                     "queue_number": o.queue_number,
                     "action": "进入等候区",
@@ -410,7 +488,6 @@ class SchedulingService:
                     "to_pile": "等候区",
                 })
 
-        # ── 恢复等候区叫号 ──
         await self.queue_dao.set_waiting_paused(False)
         await self._strategy_dispatch()
         return {
@@ -456,22 +533,11 @@ class SchedulingService:
                 if not e.is_charging:
                     await self.queue_dao.remove_from_pile_queue(e.order_id)
 
-        all_unstarted.sort(key=lambda o: _extract_queue_num(o.queue_number or ""))
+        if all_unstarted:
+            all_unstarted.sort(key=lambda o: _extract_queue_num(o.queue_number or ""))
+            await self._dispatch_or_defer_orders(all_unstarted, same_mode_piles)
 
-        for o in all_unstarted:
-            best_pile = None
-            best_time = float('inf')
-            for p in same_mode_piles:
-                q_size = await self.queue_dao.get_pile_queue_size(p.id)
-                if q_size < settings.PILE_QUEUE_LENGTH:
-                    kwh_list = await self._get_pile_queue_kwh_list(p.id)
-                    t = _calc_total_time(p, o, kwh_list)
-                    if t < best_time:
-                        best_time = t
-                        best_pile = p
-            if best_pile:
-                await self._dispatch_to_pile(o.id, best_pile.id)
-
+        # 恢复叫号
         await self.queue_dao.set_waiting_paused(False)
         await self._strategy_dispatch()
         return {"redistributed": len(all_unstarted)}

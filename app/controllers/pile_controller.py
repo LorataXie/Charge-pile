@@ -7,6 +7,7 @@ from app.services.pile_service import PileService
 from app.services.scheduling_service import SchedulingService
 from app.dao.order_dao import OrderDAO
 from app.models.vehicle import Vehicle
+from app.simulation.clock import clock
 from app.models.user import User
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -61,6 +62,9 @@ async def get_pile(
             "is_charging": e.is_charging,
             "position": e.position,
             "entered_at": e.entered_at.isoformat() if e.entered_at else None,
+            "queue_duration_minutes": round(
+                (clock.now - e.entered_at).total_seconds() / 60, 2
+            ) if e.entered_at else 0,
         })
 
     return PileWithVehicles(

@@ -7,6 +7,10 @@ from app.dependencies import engine, async_session_factory
 from app.models import Base
 from app.models.billing_rule import BillingRule, PeriodType
 from app.models.charging_pile import ChargingPile, PileStatus
+from app.models.charging_order import ChargingOrder
+from app.models.pile_queue import PileQueue
+from app.models.waiting_queue import WaitingQueue
+from app.simulation.clock import clock
 from app.controllers import (
     user_controller, charging_controller, queue_controller,
     pile_controller, billing_controller, fault_controller,
@@ -43,6 +47,19 @@ async def lifespan(app: FastAPI):
                 session.add(ChargingPile(pile_code=f"T{i+1}", mode="T", power_rate=settings.SLOW_POWER_RATE, status=PileStatus.IDLE))
 
         await session.commit()
+
+        time_candidates = []
+        for model, column in [
+            (WaitingQueue, WaitingQueue.entered_at),
+            (PileQueue, PileQueue.entered_at),
+            (ChargingOrder, ChargingOrder.end_time),
+        ]:
+            result = await session.execute(select(func.max(column)))
+            value = result.scalar()
+            if value:
+                time_candidates.append(value)
+        if time_candidates:
+            clock.set(max(time_candidates))
     yield
 
 
