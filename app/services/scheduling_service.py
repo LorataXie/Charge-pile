@@ -302,8 +302,11 @@ class SchedulingService:
         if not pile:
             raise ValueError("充电桩不存在")
         mode = pile.mode
+        dispatch_log = []  # 记录每辆车的调度去向
 
         # ── 7. 正在充电的车 → 停止计费，生成详单 ──
+        interrupted_qn = None
+        interrupted_detail_id = None
         charging_entry = await self.queue_dao.get_pile_charging_entry(pile_id)
         if charging_entry:
             co = await self.order_dao.get_by_id(charging_entry.order_id)
@@ -314,6 +317,14 @@ class SchedulingService:
                     co, pile.power_rate, is_fault_interrupted=True)
                 await self.billing_service.save_detail(detail)
                 await self.order_dao.update(co)
+                interrupted_qn = co.queue_number
+                dispatch_log.append({
+                    "queue_number": co.queue_number,
+                    "action": "充电中断",
+                    "detail": f"已充{detail.total_kwh}度，生成详单#{detail.id}",
+                    "from_pile": pile.pile_code,
+                    "to_pile": None,
+                })
 
         await self.pile_service.mark_broken(pile_id)
 
@@ -332,13 +343,16 @@ class SchedulingService:
         if not affected:
             await self.queue_dao.set_waiting_paused(False)
             await self._strategy_dispatch()
-            return {"affected_count": 0, "strategy": strategy_type}
+            return {"affected_count": 0, "strategy": strategy_type,
+                    "interrupted_vehicle": interrupted_qn,
+                    "dispatch_log": dispatch_log}
 
         same_mode_piles = [
             p for p in await self.pile_dao.get_available_by_mode(mode)
             if p.status != PileStatus.BROKEN
         ]
 
+        merged_from_other_piles = []
         if strategy_type == "TIME_ORDER":
             # 7b: 合并 "其他同类型桩尚未充电车辆 + 故障队列车辆"，按排队号排序
             for p in same_mode_piles:
@@ -348,6 +362,7 @@ class SchedulingService:
                         o = await self.order_dao.get_by_id(e.order_id)
                         if o and o not in affected:
                             affected.append(o)
+                            merged_from_other_piles.append(o.queue_number)
                         await self.queue_dao.remove_from_pile_queue(e.order_id)
             affected.sort(key=lambda o: _extract_queue_num(o.queue_number or ""))
 
@@ -366,6 +381,13 @@ class SchedulingService:
                         best_pile = p
             if best_pile:
                 await self._dispatch_to_pile(o.id, best_pile.id)
+                dispatch_log.append({
+                    "queue_number": o.queue_number,
+                    "action": f"调度至桩{best_pile.pile_code}",
+                    "detail": f"{o.requested_kwh}度 → {best_pile.pile_code}桩(等待{best_time:.2f}h)",
+                    "from_pile": pile.pile_code,
+                    "to_pile": best_pile.pile_code,
+                })
             else:
                 unassigned.append(o)
 
@@ -373,7 +395,6 @@ class SchedulingService:
         if unassigned:
             existing = await self.queue_dao.get_waiting_by_mode(mode)
             shift = len(unassigned)
-            # 现有等候车后移
             for w in reversed(existing):
                 w.position += shift
             await self.session.flush()
@@ -381,12 +402,25 @@ class SchedulingService:
                 wq = WaitingQueue(order_id=o.id, queue_number=o.queue_number or "",
                                   mode=o.mode, position=idx, entered_at=self._now())
                 await self.queue_dao.add_to_waiting(wq)
+                dispatch_log.append({
+                    "queue_number": o.queue_number,
+                    "action": "进入等候区",
+                    "detail": f"同类桩已满，插入等候区第{idx}位(优先调度)",
+                    "from_pile": pile.pile_code,
+                    "to_pile": "等候区",
+                })
 
         # ── 恢复等候区叫号 ──
         await self.queue_dao.set_waiting_paused(False)
         await self._strategy_dispatch()
-        return {"affected_count": len(affected), "strategy": strategy_type,
-                "unassigned": len(unassigned)}
+        return {
+            "affected_count": len(affected),
+            "strategy": strategy_type,
+            "unassigned": len(unassigned),
+            "interrupted_vehicle": interrupted_qn,
+            "merged_from_other_piles": merged_from_other_piles,
+            "dispatch_log": dispatch_log,
+        }
 
     async def handle_fault_recovery(self, pile_id: int) -> dict:
         """7c 故障恢复：同类型桩有排队车时才重分配"""

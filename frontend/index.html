@@ -292,6 +292,18 @@
                                 <button class="btn btn-success" @click="doRecoverPile">故障恢复</button>
                             </div>
                         </div>
+                        <!-- 调度去向详情 -->
+                        <div v-if="faultDispatchLog.length" style="margin-top:12px;padding:12px;background:#f8f9fa;border-radius:8px">
+                            <h4 style="margin:0 0 8px 0">调度去向</h4>
+                            <table style="font-size:13px">
+                                <thead><tr><th>排队号</th><th>操作</th><th>详情</th></tr></thead>
+                                <tbody><tr v-for="item in faultDispatchLog" :key="item.queue_number" :style="{background: item.action==='充电中断'?'#fce8e6':item.action.includes('等候区')?'#fff3cd':''}">
+                                    <td><strong>{{ item.queue_number }}</strong></td>
+                                    <td><span class="status-badge" :class="item.action==='充电中断'?'status-CANCELLED':item.action.includes('等候区')?'status-WAITING':'status-CHARGING'">{{ item.action }}</span></td>
+                                    <td>{{ item.detail }}</td>
+                                </tr></tbody>
+                            </table>
+                        </div>
                     </div>
                     <div class="card">
                         <h3>故障记录 <button class="btn btn-sm btn-primary" @click="loadFaults" style="margin-left:12px">刷新</button></h3>
@@ -412,6 +424,7 @@ createApp({
             pileDetail.value = null;
             waitingList.value = [];
             faults.value = [];
+            faultDispatchLog.value = [];
             reports.value = [];
             reportDetail.value = null;
             simEvents.value = [];
@@ -571,12 +584,14 @@ createApp({
         // Admin: Faults
         const faultForm = reactive({pile_id:1, strategy:'PRIORITY'});
         const faults = ref([]);
+        const faultDispatchLog = ref([]);
 
         async function doReportFault() {
             try {
                 const r = await API.reportFault(faultForm.pile_id, faultForm.strategy);
+                faultDispatchLog.value = r.detail?.dispatch_log || [];
                 showMsg(r.message); await loadFaults(); await loadPiles();
-            } catch(e) { showMsg(e.message,'error'); }
+            } catch(e) { showMsg(e.message,'error'); faultDispatchLog.value = []; }
         }
 
         async function doRecoverPile() {
@@ -649,7 +664,7 @@ createApp({
             piles, loadPiles,
             pileDetail, loadPileDetail, doStartPile, doStopPile,
             waitingList, loadWaitingArea,
-            faultForm, faults, doReportFault, doRecoverPile, loadFaults,
+            faultForm, faults, faultDispatchLog, doReportFault, doRecoverPile, loadFaults,
             reportType, reports, reportDetail, doGenerateReport, loadReports, showReportDetail,
             simClock, simEvents, loadClock, doTick, doTickN,
         };
