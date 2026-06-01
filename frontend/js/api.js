@@ -1,16 +1,16 @@
 const API_BASE = 'http://localhost:8000/api/v1';
 
 function getToken() {
-    return localStorage.getItem('token');
+    return sessionStorage.getItem('token');
 }
 
 function setToken(token) {
-    localStorage.setItem('token', token);
+    sessionStorage.setItem('token', token);
 }
 
 function clearToken() {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
+    sessionStorage.removeItem('token');
+    sessionStorage.removeItem('user');
 }
 
 async function api(path, options = {}) {

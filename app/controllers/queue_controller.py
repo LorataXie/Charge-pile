@@ -3,6 +3,7 @@ from app.dependencies import get_scheduling_service, get_db, get_current_user
 from app.schemas import QueueStatusResponse
 from app.services.scheduling_service import SchedulingService
 from app.dao.queue_dao import QueueDAO
+from app.simulation.clock import clock
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/api/v1/queue", tags=["排队状态"])
@@ -35,6 +36,9 @@ async def get_waiting_area(
             "position": e.position,
             "is_paused": e.is_paused,
             "entered_at": e.entered_at.isoformat() if e.entered_at else None,
+            "queue_duration_minutes": round(
+                (clock.now - e.entered_at).total_seconds() / 60, 2
+            ) if e.entered_at else 0,
         }
         for e in entries
     ]

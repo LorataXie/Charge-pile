@@ -16,7 +16,14 @@
             <button class="tab" :class="{active: loginMode==='login'}" @click="loginMode='login'">登录</button>
             <button class="tab" :class="{active: loginMode==='register'}" @click="loginMode='register'">注册</button>
         </div>
+        <div class="tabs" style="margin-top:10px">
+            <button class="tab" :class="{active: loginForm.role==='client'}" @click="loginForm.role='client'">用户客户端</button>
+            <button class="tab" :class="{active: loginForm.role==='admin'}" @click="loginForm.role='admin'">管理员客户端</button>
+        </div>
         <div v-if="loginMsg" class="alert" :class="'alert-'+loginMsgType">{{ loginMsg }}</div>
+        <div class="hint" style="margin-bottom:12px">
+            当前入口：{{ loginForm.role==='admin'?'管理员客户端':'用户客户端' }}。
+        </div>
         <div class="form-group"><label>用户名</label><input v-model="loginForm.username" @keyup.enter="doLogin"></div>
         <div class="form-group"><label>密码</label><input type="password" v-model="loginForm.password" @keyup.enter="doLogin"></div>
         <div v-if="loginMode==='register'" class="form-group">
@@ -76,7 +83,7 @@
                         <strong>提交成功!</strong><br>
                         排队号：<span style="font-size:22px;color:#1a73e8;font-weight:bold">{{ submitResult.queue_number }}</span><br>
                         订单ID：{{ submitResult.id }} | 状态：{{ statusMap[submitResult.status] }}
-                        <span v-if="submitResult.pile_id"> | 分配至充电桩: {{ submitResult.pile_id }}</span>
+                        <span v-if="submitResult.pile_id"> | 分配至充电桩: {{ pileCode(submitResult.pile_id) }}</span>
                     </div>
                 </div>
 
@@ -106,7 +113,7 @@
                                 <td>{{ o.id }}</td><td><strong>{{ o.queue_number || '-' }}</strong></td>
                                 <td>{{ o.mode==='F'?'快充':'慢充' }}</td><td>{{ o.requested_kwh }}</td>
                                 <td><span class="status-badge" :class="'status-'+o.status">{{ statusMap[o.status] }}</span></td>
-                                <td>{{ o.pile_id || '-' }}</td>
+                                <td>{{ o.pile_id ? pileCode(o.pile_id) : '-' }}</td>
                                 <td>
                                     <template v-if="o.queueStatus">前有 {{ o.queueStatus.waiting_count_ahead }} 辆车</template>
                                     <button v-else class="btn btn-sm" style="background:#e8f0fe" @click="checkQueue(o)">查看</button>
@@ -161,7 +168,7 @@
                     <div v-if="detailData" style="margin-top:16px">
                         <table>
                             <tr><td><strong>详单编号</strong></td><td>{{ detailData.id }}</td><td><strong>生成时间</strong></td><td>{{ detailData.created_at }}</td></tr>
-                            <tr><td><strong>订单ID</strong></td><td>{{ detailData.order_id }}</td><td><strong>充电桩编号</strong></td><td>{{ detailData.pile_id }}</td></tr>
+                            <tr><td><strong>订单ID</strong></td><td>{{ detailData.order_id }}</td><td><strong>充电桩编号</strong></td><td>{{ pileCode(detailData.pile_id) }}</td></tr>
                             <tr><td><strong>充电电量</strong></td><td>{{ detailData.total_kwh }} 度</td><td><strong>充电时长</strong></td><td>{{ detailData.charge_duration_hours.toFixed(2) }} 小时</td></tr>
                             <tr><td><strong>启动时间</strong></td><td>{{ detailData.start_time }}</td><td><strong>停止时间</strong></td><td>{{ detailData.end_time }}</td></tr>
                             <tr><td><strong>峰时电量/费用</strong></td><td>{{ detailData.peak_kwh }} 度 / {{ detailData.peak_fee.toFixed(2) }} 元</td><td><strong>平时电量/费用</strong></td><td>{{ detailData.normal_kwh }} 度 / {{ detailData.normal_fee.toFixed(2) }} 元</td></tr>
@@ -179,7 +186,7 @@
                         <div v-for="p in piles" :key="p.id" class="pile-indicator" :class="p.status.toLowerCase()">
                             <strong>{{ p.pile_code }}</strong><br>
                             <small>{{ p.mode==='F'?'快充':'慢充' }} | {{ p.power_rate }}度/h</small><br>
-                            <span class="status-badge" style="margin-top:4px">{{ p.status }}</span><br>
+                            <span class="status-badge" style="margin-top:4px">{{ pileStatusMap[p.status] || p.status }}</span><br>
                             <small>累计{{ p.total_charge_count }}次 | {{ p.total_charge_kwh.toFixed(1) }}度</small>
                         </div>
                     </div>
@@ -204,7 +211,7 @@
                         <div v-for="p in piles" :key="p.id" class="pile-indicator" :class="p.status.toLowerCase()" style="cursor:pointer" @click="loadPileDetail(p.id)">
                             <strong>{{ p.pile_code }}</strong><br>
                             <small>{{ p.mode==='F'?'快充':'慢充' }} | {{ p.power_rate }}度/h</small><br>
-                            <span class="status-badge" style="margin-top:4px">{{ p.status }}</span><br>
+                            <span class="status-badge" style="margin-top:4px">{{ pileStatusMap[p.status] || p.status }}</span><br>
                             <small>{{ p.total_charge_count }}次 | {{ p.total_charge_kwh.toFixed(1) }}度</small>
                         </div>
                     </div>
@@ -216,7 +223,7 @@
                                 <td>{{ v.user_id }}</td><td>{{ v.order_id }}</td><td><strong>{{ v.queue_number }}</strong></td>
                                 <td>{{ v.battery_capacity }}</td><td>{{ v.requested_kwh }}</td>
                                 <td>{{ v.is_charging?'充电中':'等待中' }}</td><td>#{{ v.position }}</td>
-                                <td><small>{{ v.entered_at || '-' }}</small></td>
+                                <td><small>{{ (v.queue_duration_minutes || 0).toFixed(1) }} 分钟</small></td>
                             </tr></tbody>
                         </table>
                         <div v-else>暂无等候车辆</div>
@@ -231,7 +238,7 @@
                         <tbody><tr v-for="p in piles" :key="p.id">
                             <td><strong>{{ p.pile_code }}</strong></td>
                             <td>{{ p.mode==='F'?'快充':'慢充' }}</td><td>{{ p.power_rate }}</td>
-                            <td><span class="status-badge" :class="p.status==='IDLE'?'status-CHARGING':p.status==='CHARGING'?'status-CHARGING':p.status==='BROKEN'?'status-CANCELLED':'status-CANCELLED'">{{ p.status }}</span></td>
+                            <td><span class="status-badge" :class="p.status==='IDLE'?'status-CHARGING':p.status==='CHARGING'?'status-CHARGING':p.status==='BROKEN'?'status-CANCELLED':'status-CANCELLED'">{{ pileStatusMap[p.status] || p.status }}</span></td>
                             <td>{{ p.total_charge_count }}</td><td>{{ p.total_charge_kwh.toFixed(1) }}</td><td>{{ p.total_charge_duration.toFixed(2) }}</td>
                             <td style="white-space:nowrap">
                                 <button v-if="p.status==='STOPPED'||p.status==='BROKEN'" class="btn btn-sm btn-success" @click="doStartPile(p.id)">启动</button>
@@ -245,11 +252,11 @@
                 <div v-if="tab==='waiting'" class="card">
                     <h3>等候区车辆 <button class="btn btn-sm btn-primary" @click="loadWaitingArea" style="margin-left:12px">刷新</button></h3>
                     <table v-if="waitingList.length">
-                        <thead><tr><th>订单ID</th><th>排队号</th><th>模式</th><th>位置</th><th>暂停</th><th>进入时间</th></tr></thead>
+                        <thead><tr><th>订单ID</th><th>排队号</th><th>模式</th><th>位置</th><th>暂停</th><th>排队时长</th></tr></thead>
                         <tbody><tr v-for="w in waitingList" :key="w.order_id">
                             <td>{{ w.order_id }}</td><td><strong>{{ w.queue_number }}</strong></td>
                             <td>{{ w.mode==='F'?'快充':'慢充' }}</td><td>#{{ w.position }}</td>
-                            <td>{{ w.is_paused?'是':'否' }}</td><td>{{ w.entered_at }}</td>
+                            <td>{{ w.is_paused?'是':'否' }}</td><td>{{ (w.queue_duration_minutes || 0).toFixed(1) }} 分钟</td>
                         </tr></tbody>
                     </table>
                     <div v-else style="color:#80868b;padding:24px;text-align:center">等候区暂无车辆</div>
@@ -260,7 +267,11 @@
                     <div class="card">
                         <h3>故障操作</h3>
                         <div class="form-row">
-                            <div class="form-group"><label>充电桩ID</label><input v-model.number="faultForm.pile_id"></div>
+                            <div class="form-group"><label>充电桩编号</label>
+                                <select v-model.number="faultForm.pile_id">
+                                    <option v-for="p in piles" :key="p.id" :value="p.id">{{ p.pile_code }}（{{ p.mode==='F'?'快充':'慢充' }}）</option>
+                                </select>
+                            </div>
                             <div class="form-group"><label>调度策略</label>
                                 <select v-model="faultForm.strategy">
                                     <option value="PRIORITY">优先级调度 (故障车优先)</option>
@@ -278,7 +289,7 @@
                         <table v-if="faults.length">
                             <thead><tr><th>ID</th><th>桩ID</th><th>故障时间</th><th>恢复时间</th><th>策略</th><th>影响订单</th><th>状态</th></tr></thead>
                             <tbody><tr v-for="f in faults" :key="f.id">
-                                <td>{{ f.id }}</td><td>{{ f.pile_id }}</td><td>{{ f.fault_time }}</td><td>{{ f.resolved_time || '-' }}</td>
+                                <td>{{ f.id }}</td><td>{{ pileCode(f.pile_id) }}</td><td>{{ f.fault_time }}</td><td>{{ f.resolved_time || '-' }}</td>
                                 <td>{{ f.strategy_used || '-' }}</td><td>{{ f.affected_order_count }}</td>
                                 <td><span class="status-badge" :class="f.status==='ACTIVE'?'status-CANCELLED':'status-COMPLETED'">{{ f.status }}</span></td>
                             </tr></tbody>
@@ -316,9 +327,9 @@
                         <h3>报表详情 #{{ reportDetail.id }} <button class="btn btn-sm" style="float:right" @click="reportDetail=null">关闭</button></h3>
                         <p>{{ reportDetail.report_type }} | {{ reportDetail.period_start }} ~ {{ reportDetail.period_end }}</p>
                         <table>
-                            <thead><tr><th>充电桩ID</th><th>充电次数</th><th>总时长(h)</th><th>总电量(度)</th><th>充电费(元)</th><th>服务费(元)</th><th>总费用(元)</th></tr></thead>
+                            <thead><tr><th>充电桩编号</th><th>充电次数</th><th>总时长(h)</th><th>总电量(度)</th><th>充电费(元)</th><th>服务费(元)</th><th>总费用(元)</th></tr></thead>
                             <tbody><tr v-for="p in (reportDetail.report_data.piles||[])">
-                                <td>桩 #{{ p.pile_id }}</td><td>{{ p.charge_count }}</td><td>{{ p.total_duration.toFixed(2) }}</td>
+                                <td>{{ p.pile_code || pileCode(p.pile_id) }}</td><td>{{ p.charge_count }}</td><td>{{ p.total_duration.toFixed(2) }}</td>
                                 <td>{{ p.total_kwh.toFixed(2) }}</td><td>{{ ((p.total_peak_fee||0)+(p.total_normal_fee||0)+(p.total_valley_fee||0)).toFixed(2) }}</td>
                                 <td>{{ (p.total_service_fee||0).toFixed(2) }}</td><td><strong>{{ (p.total_fee||0).toFixed(2) }}</strong></td>
                             </tr></tbody>
@@ -334,6 +345,14 @@
                         <div>每Tick: {{ simClock.tick_minutes }} 分钟</div>
                     </div>
                     <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <button v-if="!autoTickRunning" class="btn btn-success" @click="startAutoTick">开始自动流转</button>
+                        <button v-else class="btn btn-danger" @click="stopAutoTick">暂停自动流转</button>
+                        <select v-model.number="autoTickIntervalMs" :disabled="autoTickRunning" style="width:150px">
+                            <option :value="500">0.5秒 / Tick</option>
+                            <option :value="1000">1秒 / Tick</option>
+                            <option :value="2000">2秒 / Tick</option>
+                            <option :value="5000">5秒 / Tick</option>
+                        </select>
                         <button class="btn btn-primary" @click="doTick">执行 1 Tick</button>
                         <button class="btn btn-primary" @click="doTickN(4)">快速 4 Tick (1小时)</button>
                         <button class="btn btn-primary" @click="doTickN(8)">快速 8 Tick (2小时)</button>
@@ -359,10 +378,16 @@ createApp({
             WAITING:'等候中', QUEUED:'排队中', CHARGING:'充电中', COMPLETED:'已完成',
             CANCELLED:'已取消', FAULT_INTERRUPTED:'故障中断'
         };
+        const pileStatusMap = {
+            IDLE: '空闲',
+            CHARGING: '充电中',
+            BROKEN: '故障',
+            STOPPED: '已停止'
+        };
 
         // Auth
         const loggedIn = ref(!!getToken());
-        const user = ref(JSON.parse(localStorage.getItem('user')||'{}'));
+        const user = ref(JSON.parse(sessionStorage.getItem('user')||'{}'));
         const loginMode = ref('login');
         const loginForm = reactive({username:'',password:'',role:'client'});
         const loginMsg = ref(''); const loginMsgType = ref('info');
@@ -370,15 +395,23 @@ createApp({
         async function doLogin() {
             loginMsg.value='';
             try {
+                if (loginMode.value === 'register' && loginForm.role === 'admin') {
+                    throw new Error('管理员账号不能在前端注册，请选择管理员客户端后使用已有管理员账号登录');
+                }
                 const fn = loginMode.value==='login' ? API.login : API.register;
-                const r = await fn(loginForm.username, loginForm.password, loginForm.role);
+                const r = await fn(loginForm.username, loginForm.password, loginMode.value==='register' ? 'client' : loginForm.role);
                 setToken(r.access_token);
                 const me = await API.getMe();
+                if (loginMode.value === 'login' && me.role !== loginForm.role) {
+                    clearToken();
+                    throw new Error(`该账号是${me.role==='admin'?'管理员':'客户'}账号，请切换到对应客户端登录`);
+                }
                 user.value = me;
-                localStorage.setItem('user', JSON.stringify(me));
+                sessionStorage.setItem('user', JSON.stringify(me));
                 loggedIn.value = true;
                 tab.value = user.value.role==='admin'?'overview':'submit';
-                if (user.value.role==='admin') { loadPiles(); loadClock(); }
+                await loadPiles();
+                if (user.value.role==='admin') { loadClock(); }
             } catch(e) { loginMsg.value=e.message; loginMsgType.value='error'; }
         }
 
@@ -393,13 +426,18 @@ createApp({
 
         function showMsg(msg, type='success') { globalMsg.value=msg; globalMsgType.value=type; setTimeout(()=>globalMsg.value='', 4000); }
 
+        function pileCode(pileId) {
+            const pile = piles.value.find(p => p.id === pileId);
+            return pile ? pile.pile_code : `#${pileId}`;
+        }
+
         async function switchTab(t) {
             tab.value = t;
             if (t==='submit'||t==='vehicles') await loadMyVehicles();
             if (t==='orders') await loadMyOrders();
             if (t==='piles'||t==='overview'||t==='manage') await loadPiles();
             if (t==='waiting') await loadWaitingArea();
-            if (t==='faults') await loadFaults();
+            if (t==='faults') { await loadPiles(); await loadFaults(); }
             if (t==='reports') await loadReports();
             if (t==='sim') await loadClock();
         }
@@ -441,7 +479,10 @@ createApp({
 
         async function loadMyOrders() {
             loading.value=true;
-            try { myOrders.value = await API.listMyOrders(); }
+            try {
+                if (!piles.value.length) await loadPiles();
+                myOrders.value = await API.listMyOrders();
+            }
             catch(e) { showMsg(e.message,'error'); }
             finally { loading.value=false; }
         }
@@ -496,7 +537,10 @@ createApp({
         async function viewDetail(orderId) {
             detailOrderId.value = orderId;
             tab.value = 'detail';
-            try { detailData.value = await API.getDetail(orderId); }
+            try {
+                if (!piles.value.length) await loadPiles();
+                detailData.value = await API.getDetail(orderId);
+            }
             catch(e) { showMsg(e.message,'error'); detailData.value=null; }
         }
 
@@ -556,6 +600,7 @@ createApp({
         async function doGenerateReport() {
             try {
                 const r = await API.generateReport(reportType.value);
+                reportDetail.value = r;
                 showMsg('报表已生成 (ID: '+r.id+')'); await loadReports();
             } catch(e) { showMsg(e.message,'error'); }
         }
@@ -571,6 +616,10 @@ createApp({
         // Admin: Simulation
         const simClock = ref({current_time:'', tick_minutes:15});
         const simEvents = ref([]);
+        const autoTickRunning = ref(false);
+        const autoTickIntervalMs = ref(1000);
+        let autoTickTimer = null;
+        let autoTickBusy = false;
 
         async function loadClock() {
             try { simClock.value = await API.getClock(); } catch(e) { showMsg(e.message,'error'); }
@@ -585,6 +634,41 @@ createApp({
             } catch(e) { showMsg(e.message,'error'); }
         }
 
+        async function runAutoTickOnce() {
+            if (autoTickBusy) return;
+            autoTickBusy = true;
+            try {
+                const r = await API.tick();
+                simEvents.value = [...simEvents.value, ...(r.detail?.events||[])];
+                await loadClock();
+                await loadPiles();
+                if (tab.value === 'waiting') await loadWaitingArea();
+                if (tab.value === 'reports') await loadReports();
+            } catch(e) {
+                showMsg(e.message, 'error');
+                stopAutoTick();
+            } finally {
+                autoTickBusy = false;
+            }
+        }
+
+        function startAutoTick() {
+            if (autoTickTimer) return;
+            autoTickRunning.value = true;
+            showMsg('自动流转已开始');
+            runAutoTickOnce();
+            autoTickTimer = setInterval(runAutoTickOnce, autoTickIntervalMs.value);
+        }
+
+        function stopAutoTick() {
+            if (autoTickTimer) {
+                clearInterval(autoTickTimer);
+                autoTickTimer = null;
+            }
+            autoTickRunning.value = false;
+            showMsg('自动流转已暂停', 'info');
+        }
+
         async function doTickN(n) {
             for(let i=0; i<n; i++) {
                 try {
@@ -596,9 +680,14 @@ createApp({
             showMsg('已完成 '+n+' 次Tick');
         }
 
+        if (loggedIn.value) {
+            loadPiles();
+            if (user.value.role === 'admin') loadClock();
+        }
+
         return {
-            statusMap, loggedIn, user, loginMode, loginForm, loginMsg, loginMsgType, doLogin, logout,
-            tab, globalMsg, globalMsgType, loading, switchTab, showMsg,
+            statusMap, pileStatusMap, loggedIn, user, loginMode, loginForm, loginMsg, loginMsgType, doLogin, logout,
+            tab, globalMsg, globalMsgType, loading, switchTab, showMsg, pileCode,
             myVehicles, vehicleForm, loadMyVehicles, doCreateVehicle,
             submitForm, submitResult, doSubmitOrder,
             myOrders, loadMyOrders, doCancelOrder, doEndCharging, checkQueue,
@@ -609,7 +698,7 @@ createApp({
             waitingList, loadWaitingArea,
             faultForm, faults, doReportFault, doRecoverPile, loadFaults,
             reportType, reports, reportDetail, doGenerateReport, loadReports, showReportDetail,
-            simClock, simEvents, loadClock, doTick, doTickN,
+            simClock, simEvents, autoTickRunning, autoTickIntervalMs, loadClock, doTick, doTickN, startAutoTick, stopAutoTick,
         };
     }
 }).mount('#app');
