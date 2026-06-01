@@ -88,8 +88,11 @@
                     <div v-if="submitResult" style="margin-top:12px;padding:16px;background:#e8f0fe;border-radius:8px">
                         <strong>提交成功!</strong><br>
                         排队号：<span style="font-size:22px;color:#1a73e8;font-weight:bold">{{ submitResult.queue_number }}</span><br>
-                        订单ID：{{ submitResult.id }} | 状态：{{ statusMap[submitResult.status] }}
+                        订单ID：{{ submitResult.id }}
                         <span v-if="submitResult.pile_id"> | 分配至充电桩: {{ submitResult.pile_id }}</span>
+                        <br><a href="javascript:void(0)" @click="switchTab('orders')" style="color:#1a73e8;text-decoration:underline">
+                          前往「我的订单」查看实时状态（每5秒自动刷新）
+                        </a>
                     </div>
                 </div>
 
