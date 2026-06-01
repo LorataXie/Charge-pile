@@ -389,6 +389,7 @@ createApp({
 
         async function doLogin() {
             loginMsg.value='';
+            resetAllState();
             try {
                 const fn = loginMode.value==='login' ? API.login : API.register;
                 const r = await fn(loginForm.username, loginForm.password, loginForm.role);
@@ -402,7 +403,24 @@ createApp({
             } catch(e) { loginMsg.value=e.message; loginMsgType.value='error'; }
         }
 
-        function logout() { clearToken(); loggedIn.value=false; user.value={}; }
+        function resetAllState() {
+            submitResult.value = null;
+            myOrders.value = [];
+            myVehicles.value = [];
+            detailData.value = null; detailOrderId.value = null;
+            modifyOrder.value = null;
+            pileDetail.value = null;
+            waitingList.value = [];
+            faults.value = [];
+            reports.value = [];
+            reportDetail.value = null;
+            simEvents.value = [];
+            piles.value = [];
+            globalMsg.value = '';
+            if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+        }
+
+        function logout() { clearToken(); resetAllState(); loggedIn.value=false; user.value={}; }
 
         // Shared state
         const tab = ref('submit');
