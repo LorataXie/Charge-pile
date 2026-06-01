@@ -54,12 +54,15 @@
                     <h3>提交充电请求</h3>
                     <div class="form-row">
                         <div class="form-group"><label>选择车辆</label>
-                            <select v-model="submitForm.vehicle_id">
-                                <option :value="0" disabled>请先创建车辆</option>
+                            <select v-model="submitForm.vehicle_id" v-if="myVehicles.length">
+                                <option :value="0" disabled>选择车辆</option>
                                 <option v-for="v in myVehicles" :key="v.id" :value="v.id">
                                     {{ v.license_plate }} ({{ v.battery_capacity }}度)
                                 </option>
                             </select>
+                            <div v-else class="alert alert-info" style="margin:0">
+                                暂无车辆，请先到 <a href="javascript:void(0)" @click="switchTab('vehicles')" style="color:#1a73e8;font-weight:bold">「我的车辆」</a> 创建车辆后再提交请求。
+                            </div>
                         </div>
                         <div class="form-group"><label>充电模式</label>
                             <select v-model="submitForm.mode">
@@ -394,8 +397,8 @@ createApp({
                 user.value = me;
                 localStorage.setItem('user', JSON.stringify(me));
                 loggedIn.value = true;
-                tab.value = user.value.role==='admin'?'overview':'submit';
-                if (user.value.role==='admin') { loadPiles(); loadClock(); }
+                if (user.value.role === 'client') { tab.value = 'submit'; await loadMyVehicles(); }
+                if (user.value.role === 'admin') { tab.value = 'overview'; loadPiles(); loadClock(); }
             } catch(e) { loginMsg.value=e.message; loginMsgType.value='error'; }
         }
 
