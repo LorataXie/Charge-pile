@@ -28,7 +28,7 @@
         <div class="form-group"><label>密码</label><input type="password" v-model="loginForm.password" @keyup.enter="doLogin"></div>
         <div v-if="loginMode==='register'" class="form-group">
             <label>角色</label><input value="客户" disabled style="background:#f1f3f4">
-            <div class="hint">前端注册默认为客户，管理员账号请联系系统管理员创建</div>
+            <div class="hint">管理员账号需通过 CLI 创建：python cli/main.py create-admin</div>
         </div>
         <button class="btn btn-primary" style="width:100%" @click="doLogin">{{ loginMode==='login'?'登录':'注册' }}</button>
     </div>
@@ -125,7 +125,7 @@
                 <!-- My Orders -->
                 <div v-if="tab==='orders'" class="card">
                     <h3>我的订单 <button class="btn btn-sm btn-primary" @click="loadMyOrders" :disabled="loading" style="margin-left:12px">刷新</button> <small style="color:#80868b">(每5秒自动刷新)</small></h3>
-                    <div class="alert alert-info" style="font-size:13px">提示：订单状态随管理员仿真推进而变化。请联系管理员在「仿真控制」Tab 执行 Tick 推进充电进度。</div>
+                    <div class="hint" style="margin-bottom:8px">充电区（排队中/充电中）订单不可修改，需先取消后重新提交。状态随仿真 Tick 自动刷新。</div>
                     <table v-if="myOrders.length">
                         <thead><tr><th>ID</th><th>排队号</th><th>模式</th><th>请求量(度)</th><th>状态</th><th>充电桩</th><th>排队前车</th><th>操作</th></tr></thead>
                         <tbody>
